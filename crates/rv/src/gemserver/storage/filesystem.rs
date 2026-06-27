@@ -1,7 +1,7 @@
 use super::{Blob, Result, Storage};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 /// Internal struct for JSON serialization of blob metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,25 +50,28 @@ impl FilesystemStorage {
         Self { base_path }
     }
 
-    fn resolve_path(&self, key: &str) -> PathBuf {
-        self.base_path.join(key)
+    fn resolve_path(&self, key: &str) -> Result<PathBuf> {
+        validate_key(key)?;
+        Ok(self.base_path.join(key))
     }
 
-    fn metadata_path(&self, key: &str) -> PathBuf {
-        self.base_path
+    fn metadata_path(&self, key: &str) -> Result<PathBuf> {
+        validate_key(key)?;
+        Ok(self
+            .base_path
             .join("metadata")
-            .join(format!("{}.json", key))
+            .join(format!("{}.json", key)))
     }
 }
 
 impl FilesystemStorage {
     // Private helper methods for implementation
     async fn read(&self, key: &str) -> Result<Vec<u8>> {
-        Ok(tokio::fs::read(self.resolve_path(key)).await?)
+        Ok(tokio::fs::read(self.resolve_path(key)?).await?)
     }
 
     async fn write(&self, key: &str, content: &[u8]) -> Result<()> {
-        let path = self.resolve_path(key);
+        let path = self.resolve_path(key)?;
 
         // Create parent directory if needed
         if let Some(parent) = path.parent() {
@@ -79,7 +82,7 @@ impl FilesystemStorage {
     }
 
     async fn write_metadata_file(&self, key: &str, metadata: &MetadataFile) -> Result<()> {
-        let path = self.metadata_path(key);
+        let path = self.metadata_path(key)?;
 
         // Create metadata directory if needed
         if let Some(parent) = path.parent() {
@@ -92,7 +95,7 @@ impl FilesystemStorage {
     }
 
     async fn read_metadata_file(&self, key: &str) -> Option<MetadataFile> {
-        let path = self.metadata_path(key);
+        let path = self.metadata_path(key).ok()?;
 
         // Try reading metadata JSON directly - no need to check existence first
         // This eliminates one async fs::metadata() call per read
@@ -106,10 +109,31 @@ impl FilesystemStorage {
     }
 }
 
+fn validate_key(key: &str) -> Result<()> {
+    if key.is_empty()
+        || key.starts_with('/')
+        || key.contains('\\')
+        || key.contains(':')
+        || key
+            .split('/')
+            .any(|component| component.is_empty() || matches!(component, "." | ".."))
+        || Path::new(key)
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(super::Error::InvalidKey);
+    }
+
+    Ok(())
+}
+
 #[async_trait]
 impl Storage for FilesystemStorage {
     async fn exists(&self, key: &str) -> bool {
-        tokio::fs::metadata(self.resolve_path(key)).await.is_ok()
+        let Ok(path) = self.resolve_path(key) else {
+            return false;
+        };
+        tokio::fs::metadata(path).await.is_ok()
     }
 
     async fn read_blob(&self, key: &str) -> Result<Blob> {
@@ -218,5 +242,35 @@ mod tests {
         let read_blob = storage.read_blob("testfile").await.unwrap();
         assert_eq!(read_blob.content, b"content");
         assert_eq!(read_blob.etag, None);
+    }
+
+    #[tokio::test]
+    async fn test_filesystem_storage_nested_blob_operations() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = FilesystemStorage::new(temp_dir.path().to_path_buf());
+
+        let blob = Blob::new(b"nested content".to_vec());
+        storage.write_blob("info/demo", &blob).await.unwrap();
+
+        let read_blob = storage.read_blob("info/demo").await.unwrap();
+        assert_eq!(read_blob.content, b"nested content");
+    }
+
+    #[tokio::test]
+    async fn test_filesystem_storage_rejects_unsafe_keys() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache_root = temp_dir.path().join("compact-index-cache");
+        fs::create_dir_all(&cache_root).unwrap();
+        let storage = FilesystemStorage::new(cache_root);
+
+        for key in ["info/../../owned", "/owned", r"info\..\owned", "C:/owned"] {
+            let result = storage.write_blob(key, &Blob::new(b"owned".to_vec())).await;
+            assert!(
+                matches!(result, Err(super::super::Error::InvalidKey)),
+                "{key} should be rejected"
+            );
+        }
+
+        assert!(!temp_dir.path().join("owned").exists());
     }
 }

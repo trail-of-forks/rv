@@ -214,3 +214,41 @@ fn test_tool_install_package_data_tar_gz_with_trailing_garbage() {
     info_endpoint_mock.assert();
     tarball_mock.assert();
 }
+
+#[test]
+fn test_tool_install_rejects_path_like_transitive_dependency_name() {
+    let mut test = RvTest::new();
+    let cache_dir = test.enable_cache();
+
+    let _releases_mock = test.mock_releases_all_platforms(["4.0.0"].to_vec());
+    let _ruby_mock = test.mock_ruby_download("4.0.0").create();
+
+    let info_endpoint_mock = test
+        .mock_request("GET", "info/indirect")
+        .with_status(200)
+        .with_header("content-type", "text/plain; charset=utf-8")
+        .with_body(
+            "---\n\
+             1.2.0 ../../owned:>= 0|checksum:\
+             db84552fdc9b5d67dd64227ab60a05201554085c00ca5973ec96605af25edc73\n",
+        )
+        .create();
+    let _escaped_info_mock = test
+        .mock_request("GET", "owned")
+        .with_status(200)
+        .with_header("content-type", "text/plain; charset=utf-8")
+        .with_body(
+            "---\n\
+             1.0.0 |checksum:\
+             db84552fdc9b5d67dd64227ab60a05201554085c00ca5973ec96605af25edc73\n",
+        )
+        .create();
+
+    let output = test.tool_install(&["indirect"]);
+    output
+        .assert_failure()
+        .assert_stderr_contains("Could not parse gem metadata from the server");
+
+    assert!(!cache_dir.join("gemdeps-v0/owned").exists());
+    info_endpoint_mock.assert();
+}

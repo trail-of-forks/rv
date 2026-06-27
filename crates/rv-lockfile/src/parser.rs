@@ -256,10 +256,16 @@ fn parse_operator<'i>(i: &mut Input<'i>) -> Res<ComparisonOperator> {
 }
 
 fn parse_gem_name<'i>(i: &mut Input<'i>) -> Res<&'i str> {
-    take_while(0.., |c: char| {
+    let name = take_while(1.., |c: char| {
         c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.'
     })
-    .parse_next(i)
+    .parse_next(i)?;
+
+    if rv_gem_types::validate_gem_name(name).is_err() {
+        return winnow::combinator::fail.parse_next(i);
+    }
+
+    Ok(name)
 }
 
 fn parse_specific_platform<'i>(i: &mut Input<'i>) -> Res<Platform> {
@@ -593,6 +599,14 @@ GEM
             let mut input = LocatingSlice::new(input);
             let out = parse_spec_dep.parse_next(&mut input).unwrap();
             assert_eq!(original_input.trim(), out.to_gemfile_lock());
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_gem_names() {
+        for input in ["      \n", "      ..\n"] {
+            let mut input = LocatingSlice::new(input);
+            assert!(parse_spec_dep.parse_next(&mut input).is_err());
         }
     }
 

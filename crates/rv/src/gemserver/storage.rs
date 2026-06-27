@@ -12,6 +12,8 @@ pub enum Error {
     IoError(#[from] std::io::Error),
     #[error(transparent)]
     SerdeJson(#[from] serde_json::Error),
+    #[error("Storage key contains an unsafe path component")]
+    InvalidKey,
     #[error("Cannot verify empty content against digest")]
     EmptyContent,
     #[error(

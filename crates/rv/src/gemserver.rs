@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::{rc::Rc, sync::Mutex};
 
 use rv_gem_types::requirement::{Requirement, VersionConstraint};
-use rv_gem_types::{Platform, ProjectDependency, VersionPlatform};
+use rv_gem_types::{Platform, ProjectDependency, VersionPlatform, validate_gem_name};
 use rv_ruby::version::RubyVersion;
 use rv_version::Version;
 use serde::{Deserialize, Serialize};
@@ -38,8 +38,10 @@ pub enum Error {
     StorageError(#[from] storage::Error),
     #[error(transparent)]
     Reqwest(#[from] reqwest::Error),
-    #[error("Could not parse a version from the server: {0}")]
+    #[error("Could not parse gem metadata from the server: {0}")]
     GemReleaseParse(#[from] GemReleaseParse),
+    #[error("Could not use a gem name from the server: {0}")]
+    InvalidGemName(#[from] rv_gem_types::GemNameError),
     #[error("Could not create the cache dir: {0}")]
     CouldNotCreateCacheDir(std::io::Error),
     #[error("The url {url} unexpectedly returned an empty response")]
@@ -97,6 +99,7 @@ impl Gemserver {
     /// This function doesn't parse the response, so that the parser doesn't have to copy any strings.
     /// Whoever calls this should own the response, and then the parser will borrow &strs from the response.
     pub async fn get_releases_for_gem(&self, gem: &str) -> Result<String> {
+        validate_gem_name(gem)?;
         let info_key = format!("info/{}", gem);
         let info_url = self.url.join(&info_key).expect("valid info URL");
 
@@ -208,6 +211,8 @@ pub enum GemReleaseParse {
     InvalidVersion(#[from] rv_version::VersionError),
     #[error("Invalid release: {0}")]
     InvalidRelease(String),
+    #[error(transparent)]
+    InvalidDependency(#[from] rv_gem_types::ProjectDependencyError),
     #[error("Unknown semver constraint type {0}")]
     UnknownSemverType(String),
     #[error("Unknown metadata key {key} in metadata field: {metadata}")]
@@ -298,10 +303,8 @@ impl GemRelease {
                         .split('&')
                         .map(parse_version_constraint)
                         .collect::<ParseResult<Vec<_>>>()?;
-                    Ok(ProjectDependency {
-                        name: name.to_owned(),
-                        requirement: version_constraint.into(),
-                    })
+                    ProjectDependency::from_requirement(name.to_owned(), version_constraint.into())
+                        .map_err(Into::into)
                 })
                 .collect::<ParseResult<Vec<_>>>()?
         };
@@ -523,5 +526,14 @@ mod tests {
             actual.metadata.created_at,
             Some("2011-08-15T18:41:56Z".to_string())
         );
+    }
+
+    #[test]
+    fn test_parser_rejects_path_like_dependency_names() {
+        let result = GemRelease::parse("1.0.0 ../../owned:>= 0|");
+        assert!(matches!(
+            result.unwrap_err(),
+            GemReleaseParse::InvalidDependency(_)
+        ));
     }
 }

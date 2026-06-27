@@ -31,7 +31,7 @@ pub enum Error {
     VersionError(#[from] rv_version::VersionError),
     #[error(transparent)]
     GemserverError(#[from] gemserver::Error),
-    #[error("Could not parse a version from the server")]
+    #[error("Could not parse gem metadata from the server: {0}")]
     GemReleaseParse(#[from] gemserver::GemReleaseParse),
     #[error("Could not create the cache dir: {0}")]
     CouldNotCreateCacheDir(std::io::Error),

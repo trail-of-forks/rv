@@ -1,4 +1,5 @@
 pub mod dependency;
+pub mod gem_name;
 pub mod platform;
 pub mod project_dependency;
 pub mod release_tuple;
@@ -7,6 +8,7 @@ pub mod specification;
 pub mod version_platform;
 
 pub use dependency::{Dependency, DependencyError, DependencyType};
+pub use gem_name::{GemNameError, validate_gem_name};
 pub use platform::{Platform, PlatformError};
 pub use project_dependency::{ProjectDependency, ProjectDependencyError};
 pub use release_tuple::{ReleaseTuple, ReleaseTupleError};
