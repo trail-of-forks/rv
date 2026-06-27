@@ -23,6 +23,8 @@ pub enum Error {
     ConfigError(#[from] crate::config::Error),
     #[error(transparent)]
     ReqwestError(#[from] reqwest::Error),
+    #[error("Invalid Ruby archive URL: {0}")]
+    UrlParseError(#[from] url::ParseError),
     #[error(transparent)]
     IoError(#[from] std::io::Error),
     #[error(transparent)]
@@ -316,11 +318,13 @@ async fn fetch_url(url: &str, redirects: bool) -> Result<reqwest::Response> {
         reqwest::Client::new()
     };
 
+    let url = url::Url::parse(url)?;
+    let should_authenticate = crate::config::github::is_allowed_github_auth_url(&url);
     let mut request_builder = client.get(url);
 
     // Add GitHub token authentication if available and URL is from GitHub
     // Check GITHUB_TOKEN first (GitHub Actions), then GH_TOKEN (GitHub CLI/general use)
-    if crate::config::github::is_github_url(url) {
+    if should_authenticate {
         if let Some(token) = crate::config::github::github_token() {
             debug!("Using authenticated GitHub request for archive download");
             request_builder = request_builder.header("Authorization", format!("Bearer {}", token));

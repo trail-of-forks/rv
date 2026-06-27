@@ -1,4 +1,5 @@
 use crate::common::RvTest;
+use mockito::Matcher;
 use std::fs;
 
 #[test]
@@ -310,6 +311,28 @@ fn test_ruby_install_invalid_url() {
             "No files should be created in tarballs directory"
         );
     }
+}
+
+#[test]
+fn test_ruby_install_http_mirror_does_not_receive_github_token() {
+    let mut test = RvTest::new();
+    test.env
+        .insert("GITHUB_TOKEN".into(), "secret-token".into());
+
+    let tarball_content = test.create_mock_tarball("3.4.5");
+    let download_path = test.ruby_tarball_download_path("3.4.5");
+    let ruby_mock = test
+        .mock_request("GET", &download_path)
+        .match_header("authorization", Matcher::Missing)
+        .with_status(200)
+        .with_header("content-type", "application/gzip")
+        .with_body(&tarball_content)
+        .create();
+
+    let output = test.rv(&["ruby", "install", "3.4.5"]);
+
+    ruby_mock.assert();
+    output.assert_success();
 }
 
 #[test]

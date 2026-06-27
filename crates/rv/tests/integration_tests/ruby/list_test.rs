@@ -1,5 +1,6 @@
 use crate::common::{RvOutput, RvTest};
 use insta::assert_snapshot;
+use mockito::Matcher;
 use rv_platform::HostPlatform;
 
 impl RvTest {
@@ -30,6 +31,26 @@ fn test_ruby_list_json_output_empty() {
     output.assert_success();
     assert!(output.stderr().is_empty());
     assert_snapshot!(output.normalized_stdout());
+}
+
+#[test]
+fn test_ruby_list_http_mirror_does_not_receive_github_token() {
+    let mut test = RvTest::new();
+    test.env
+        .insert("GITHUB_TOKEN".into(), "secret-token".into());
+
+    let mock = test
+        .mock_request("GET", "repos/spinel-coop/rv-ruby/releases/latest")
+        .match_header("authorization", Matcher::Missing)
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"name":"latest","assets":[]}"#)
+        .create();
+
+    let output = test.ruby_list(&["--format", "json"]);
+
+    mock.assert();
+    output.assert_success();
 }
 
 #[test]

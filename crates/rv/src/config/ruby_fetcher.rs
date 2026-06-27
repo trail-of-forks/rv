@@ -46,6 +46,8 @@ pub enum Error {
     Request(#[from] RequestError),
     #[error("Failed to fetch available ruby versions from GitHub")]
     GithubRequest(#[from] reqwest::Error),
+    #[error("Invalid GitHub release URL: {0}")]
+    UrlParse(#[from] url::ParseError),
     #[error(transparent)]
     ParseVersion(#[from] ParseVersionError),
 }
@@ -166,7 +168,7 @@ async fn fetch_cached_github_release(
 
     // 3. Cache is stale or missing.
     let etag = cached_data.as_ref().and_then(|c| c.etag.clone());
-    let mut request_builder = super::github::github_api_get(&client, url);
+    let mut request_builder = super::github::github_api_get(&client, url)?;
 
     if let Some(etag) = &etag {
         debug!("Using ETag for conditional request: {}", etag);
