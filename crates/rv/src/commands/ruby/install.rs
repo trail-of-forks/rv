@@ -41,7 +41,7 @@ pub enum Error {
     },
     #[error("Could not get latest ruby-dev release")]
     GetLatestDevReleaseFailed,
-    #[error("Paths including .. are not allowed inside archives, but found {0}")]
+    #[error("Archive entry is not contained inside the install root: {0}")]
     DirectoryTraversalError(String),
     #[error(transparent)]
     UnsupportedPlatform(#[from] rv_platform::UnsupportedPlatformError),
@@ -406,20 +406,7 @@ fn extract_zip(zip_path: &Utf8Path, rubies_dir: &Utf8Path, version: &str) -> Res
 
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
-        let entry_path = entry.name().to_string();
-
-        // Normalize path: repackage RubyInstaller format to rv format
-        let path = entry_path
-            .replace(
-                &format!("rubyinstaller-{}", version),
-                &format!("ruby-{}", version),
-            )
-            .replace('\\', "/"); // Normalize Windows path separators
-
-        if path.contains("..") {
-            return Err(Error::DirectoryTraversalError(path));
-        }
-
+        let path = validated_zip_entry_path(entry.name(), version)?;
         let dst = rubies_dir.join(&path);
 
         if entry.is_dir() {
@@ -433,6 +420,40 @@ fn extract_zip(zip_path: &Utf8Path, rubies_dir: &Utf8Path, version: &str) -> Res
         }
     }
     Ok(())
+}
+
+fn validated_zip_entry_path(entry_path: &str, version: &str) -> Result<Utf8PathBuf> {
+    let path = entry_path.replace('\\', "/").replace(
+        &format!("rubyinstaller-{}", version),
+        &format!("ruby-{}", version),
+    );
+
+    if path.contains('\0') || path.starts_with('/') {
+        return Err(Error::DirectoryTraversalError(path));
+    }
+
+    let mut relative_path = Utf8PathBuf::new();
+    for component in path.split('/') {
+        match component {
+            "" | "." => continue,
+            ".." => return Err(Error::DirectoryTraversalError(path.clone())),
+            _ if has_windows_drive_prefix(component) => {
+                return Err(Error::DirectoryTraversalError(path.clone()));
+            }
+            _ => relative_path.push(component),
+        }
+    }
+
+    if relative_path.as_str().is_empty() || relative_path.is_absolute() {
+        return Err(Error::DirectoryTraversalError(path));
+    }
+
+    Ok(relative_path)
+}
+
+fn has_windows_drive_prefix(component: &str) -> bool {
+    let bytes = component.as_bytes();
+    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }
 
 fn entry_extract_fn(
@@ -574,6 +595,55 @@ mod tests {
 
         let content = std::fs::read_to_string(ruby_exe.path()).unwrap();
         assert_eq!(content, "fake ruby executable");
+    }
+
+    #[test]
+    fn test_extract_zip_rejects_absolute_entry_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let rubies_dir = temp_dir.child("rubies");
+        rubies_dir.create_dir_all().unwrap();
+
+        let escape_target = temp_dir.child("escaped-outside-rubies.txt");
+        let entry_name = escape_target.path().to_str().unwrap();
+        let zip_path = temp_dir.child("absolute-path.zip");
+        {
+            let file = std::fs::File::create(zip_path.path()).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let options: zip::write::SimpleFileOptions = Default::default();
+            zip.start_file::<_, ()>(entry_name, options).unwrap();
+            zip.write_all(b"owned").unwrap();
+            zip.finish().unwrap();
+        }
+
+        let rubies_path = Utf8Path::from_path(rubies_dir.path()).unwrap();
+        let zip_utf8_path = Utf8Path::from_path(zip_path.path()).unwrap();
+        let result = extract_zip(zip_utf8_path, rubies_path, "3.4.1");
+
+        let Err(Error::DirectoryTraversalError(path)) = result else {
+            unreachable!("absolute ZIP entry should fail with DirectoryTraversalError");
+        };
+        assert_eq!(path, entry_name.replace('\\', "/"));
+        assert!(
+            !escape_target.exists(),
+            "absolute ZIP entry should not be written outside rubies_dir",
+        );
+    }
+
+    #[test]
+    fn test_validated_zip_entry_path_rejects_unsafe_paths() {
+        for entry_path in [
+            "/tmp/rv-owned.txt",
+            "C:/tmp/rv-owned.txt",
+            r"C:\tmp\rv-owned.txt",
+            r"\\server\share\rv-owned.txt",
+            "rubyinstaller-3.4.1/\0owned",
+            "rubyinstaller-3.4.1/../owned",
+        ] {
+            assert!(
+                validated_zip_entry_path(entry_path, "3.4.1").is_err(),
+                "unsafe ZIP entry path should be rejected: {entry_path}",
+            );
+        }
     }
 
     #[test]

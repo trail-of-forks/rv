@@ -1,5 +1,6 @@
 use crate::common::RvTest;
 use std::fs;
+use std::io::Write as _;
 
 #[test]
 fn test_ruby_install_no_specific_version() {
@@ -166,6 +167,38 @@ fn test_ruby_install_from_zip_with_files_falling_outside_root() {
     assert!(
         !owned_path.exists(),
         "No malicious file should be created, but found {owned_path}",
+    );
+}
+
+#[test]
+fn test_ruby_install_from_zip_with_absolute_path_fails_closed() {
+    let test = RvTest::new();
+
+    let escape_target = test.temp_root().join("escaped-outside-rubies.txt");
+    let tarball_path = test.temp_root().join("absolute-path.zip");
+    {
+        let file = std::fs::File::create(&tarball_path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options: zip::write::SimpleFileOptions = Default::default();
+        zip.start_file::<_, ()>(escape_target.as_str(), options)
+            .unwrap();
+        zip.write_all(b"owned").unwrap();
+        zip.finish().unwrap();
+    }
+
+    let output = test.rv(&[
+        "ruby",
+        "install",
+        "--tarball-path",
+        tarball_path.as_str(),
+        "3.4.5",
+    ]);
+
+    output.assert_failure();
+    output.assert_stderr_contains("DirectoryTraversalError");
+    assert!(
+        !escape_target.exists(),
+        "absolute ZIP entry should not be written outside rubies_dir",
     );
 }
 
