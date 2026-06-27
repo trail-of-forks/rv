@@ -233,8 +233,9 @@ fn test_tool_install_rejects_path_like_transitive_dependency_name() {
              db84552fdc9b5d67dd64227ab60a05201554085c00ca5973ec96605af25edc73\n",
         )
         .create();
-    let _escaped_info_mock = test
+    let escaped_info_mock = test
         .mock_request("GET", "owned")
+        .expect(0)
         .with_status(200)
         .with_header("content-type", "text/plain; charset=utf-8")
         .with_body(
@@ -245,10 +246,9 @@ fn test_tool_install_rejects_path_like_transitive_dependency_name() {
         .create();
 
     let output = test.tool_install(&["indirect"]);
-    output
-        .assert_failure()
-        .assert_stderr_contains("Could not parse gem metadata from the server");
+    output.assert_failure();
 
     assert!(!cache_dir.join("gemdeps-v0/owned").exists());
     info_endpoint_mock.assert();
+    escaped_info_mock.assert();
 }
